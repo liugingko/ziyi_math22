@@ -21,24 +21,56 @@ np.random.seed(0)
 calculate_loss_over_all_values = False
 
 input_window = 118
-output_window = 5
-batch_size = 1  # batch size
+output_window = 21
+batch_size = 4  # batch size
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-#### 数据预处理 ####
-def get_padding_mask(input):
+def get_data1():
 
-    input1 = pd.DataFrame(input)
-    for pub in range(1970, 2020):
-        if pub == 1970:
-            input1.loc[input1['出版年'] == 1970, 1970:2019] = 0
-        else:
-            input1.loc[input1['出版年'] == 1970, 1970:pub - 1] = 1  # 1 转换为 bool 是 TRUE，表示掩码
-            input1.loc[input1['出版年'] == 1970, pub:2019] = 0
-    input1 = input1.loc[:, 1970:2019]
-    return input1
+    data = pd.read_excel('src/附件3、土壤湿度2022—2012年.xls')
+    # data = pd.concat(data, ignore_index=True)
 
+    data = data.dropna()
+    # print(data.columns)
+    data = data.loc[:, '10cm湿度(kg/m2)':'200cm湿度(kg/m2)']
+    max1 = max(data.max())
+    print('max1=', max1)
+    data = data/max1
+
+    data_arr10 = list(data['10cm湿度(kg/m2)'])[::-1]
+    data_arr40 = list(data['40cm湿度(kg/m2)'])[::-1]
+    data_arr100 = list(data['100cm湿度(kg/m2)'])[::-1]
+    data_arr200 = list(data['200cm湿度(kg/m2)'])[::-1]
+    data_arr = np.array([data_arr10,
+                         data_arr40,
+                         data_arr100])
+
+    data_arr2  = np.array([data_arr10,
+                         data_arr40,
+                         data_arr100,
+                         data_arr200])
+
+    print(data_arr.shape)
+
+
+    train_seq = torch.from_numpy(np.array(data_arr[:, :-output_window]))
+
+    train_label = torch.from_numpy(np.array(data_arr[:, output_window:]))
+
+    train_label = torch.tensor(train_label, dtype=torch.float)
+
+    padding = torch.from_numpy(np.zeros([3, 102]))
+    padding = torch.tensor(padding, dtype=torch.float)
+
+    data, paddata = train_label.to(device), padding.to(device)
+
+    target = torch.stack(torch.stack([item for item in data]).chunk(input_window, 1))
+
+
+    print('target, padding, max1', target.shape, padding.shape)
+
+    return target, padding, max1
 
 def get_data():
 
@@ -50,7 +82,7 @@ def get_data():
     data = data.loc[:, '10cm湿度(kg/m2)':'200cm湿度(kg/m2)']
     max1 = max(data.max())
     print('max1=', max1)
-    # data = data/max1
+    data = data/max1
 
     data_arr10 = list(data['10cm湿度(kg/m2)'])[::-1]
     data_arr40 = list(data['40cm湿度(kg/m2)'])[::-1]
@@ -68,41 +100,29 @@ def get_data():
     train_label = torch.from_numpy(np.array(data_arr[:, output_window:]))
     train_padding = torch.from_numpy(np.zeros(train_label.shape))
 
-    print(train_seq.shape)
-    print(train_label.shape)
-    print(train_padding.shape)
+    # print(train_seq.shape)
+    # print(train_label.shape)
+    # print(train_padding.shape)
 
     train_sequence = torch.stack((train_seq, train_label, train_padding), dim=1).type(torch.FloatTensor)
-    print(train_sequence.shape)
+    # print(train_sequence.shape)
 
     return train_sequence.to(device), train_sequence.to(device), max1
 
 
 def get_batch(source, i, batch_size):
     seq_len = min(batch_size, len(source) - 1 - i)
-    print(seq_len, len(source))
-    print(i, i + seq_len)
+    print('====000', seq_len, len(source))
+    # print(i, i + seq_len)
     data = source[i:i + seq_len]
-    print(data.shape)
+    print('data.shape', data.shape)
     # seq_len = min(batch_size, len(source) - 1 - i)
     # data = source[i:i+seq_len]
-    for item in data:
-        print(item.shape)
-        print(item[0].shape)
+
     input = torch.stack(torch.stack([item[0] for item in data]).chunk(input_window, 1))  # 1 is feature size
     target = torch.stack(torch.stack([item[1] for item in data]).chunk(input_window, 1))
     padding = torch.stack(torch.stack([item[2] for item in data]).chunk(input_window, 1))
     padding = padding.squeeze(2).transpose(0, 1)
-    # p = 0
-    # for i in range(padding.size(0)):
-    #     if torch.sum(padding[i]) == input.size(1):
-    #         continue
-    #     else:
-    #         p = i
-    #         break
-    # input = input[p:]
-    # target = target[p:]
-    # padding = padding[p:]
 
     return input, target, padding
 
@@ -239,11 +259,13 @@ def plot_and_loss(eval_model, data_source, epoch):
 def evaluate(eval_model, data_source):
     eval_model.eval()  # Turn on the evaluation mode
     total_loss = 0.
-    eval_batch_size = 1
+    eval_batch_size = 4
     with torch.no_grad():
         for i in range(0, len(data_source) - 1, eval_batch_size):
             data, targets, key_padding_mask = get_batch(data_source, i, eval_batch_size)
+            print('============', data.shape, key_padding_mask.shape)
             output = eval_model(data, key_padding_mask)
+            print('000', output.shape)
             if calculate_loss_over_all_values:
                 total_loss += len(data[0]) * criterion(output, targets).cpu().item()
             else:
@@ -290,3 +312,15 @@ for epoch in range(1, epochs + 1):
 
 # t1, t2, t3 = get_batch(train_data, 0, 1)
 # out = model(t1, t3)
+data, key_padding_mask, max1 = get_data1()
+model.eval()
+print(data.shape, key_padding_mask.shape)
+
+output = model(data, key_padding_mask)
+
+tmp = []
+for i in range(3):
+    for item in output[:, i, :].detach().numpy().tolist()[:-21]:
+        tmp.append(round(item[0] * max1, 2))
+    print(tmp)
+    tmp = []
